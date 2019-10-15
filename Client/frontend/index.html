@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body {
+  margin: 0 auto;
+  max-width: 800px;
+  padding: 0 20px;
+  display: flex;
+}
+
+.container {
+  border: 2px solid #dedede;
+  background-color: #f1f1f1;
+  border-radius: 5px;
+  padding: 10px;
+  margin: 10px 0;
+}
+
+.peers {
+  border: 2px solid #dedede;
+  background-color: #f1f1f1;
+  border-radius: 5px;
+  padding: 10px;
+  margin: 10px 0;
+}
+</style>
+</head>
+<body>
+    <div id="wrapperDiv">
+        <div style="float: left;">
+            <h2>Peer Messages</h2>
+            <div id="div1" class="container">
+                <p>Chattt</p>
+            </div>
+              <input id="newMsg" type="text" name="Message" value=""><br>
+              <button type="submit" onclick="sendMsg()"> Send Message</button>
+        </div>
+        <div style="float: left;">
+            <h2>Peers</h2>
+            <div id="peers_div" class="container">
+                <p>Peerss</p>
+            </div>
+              <input id="new_peer" type="text" name="NewPeer" value=""><br>
+              <button type="submit" onclick="addNewPeer()"> Add Peer</button>
+            <div id class="container">
+                    <p>Our ID IP</p>
+                </div>
+        </div>
+            
+    </div>
+    <script>
+ 
+    var i; 
+
+    // for(i = 0; i < 10; i++){ //this proves that we can bring messages as they come
+    //   setTimeout(function(){
+    //   var peers = document.getElementById("peers_div")
+    //   var para = document.createElement("p");
+    //   var node = document.createTextNode("peerrrr")
+    //   para.appendChild(node)
+    //   peers.appendChild(para)
+    //   }, 1000 * i)
+    // }
+    
+    function addNewPeer(){ //dont forget to check for empty values
+      var value = document.getElementById("new_peer").value
+      document.getElementById("new_peer").value = ""
+      alert(value)
+    }
+    
+    function sendMsg(){ //dont forget to check for empty values
+      var value = document.getElementById("newMsg").value
+      document.getElementById("newMsg").value = ""
+      alert(value)
+    }
+
+    
+    </script>
+    
+
+  
+    
+</body>
