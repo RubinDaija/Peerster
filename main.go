@@ -146,35 +146,39 @@ func swMsgPeer(msg additional.SWResponse, recv *chan int, del *chan additional.S
 }
 
 //compares our status packet with their and if we have smth we send it otherwise it puts nil in the origin field of SRResponsePacket to signify that we should send a status packet
-func compareStatus(ourStatus *additional.StatusMap, theirPack *additional.GossipPacket, response *chan additional.SRResponsePacket, addr string) {
+func compareStatus(ourStatus *additional.StatusMap, theirStatus *additional.StatusPacket, response *chan additional.SRResponsePacket, addr string) {
 	ourMap := ourStatus.GetStatusMap()
 	theirMap := make(map[string]uint32)
 	//convert their status packet to a map
-	statusArr := theirPack.Status.Want
+	statusArr := theirStatus.Want
 	for _, stat := range statusArr {
 		theirMap[stat.Identifier] = stat.NextID
 	}
-
 	//comparison time
 	if len(theirMap) > len(ourMap) { //they have more elems than us so we just send a status packet to get smth; this is more efficient than to do the comparison and do this check
 		*response <- additional.SRResponsePacket{IP: addr, Origin: "SsendstatuspacketS", MessageID: 1} //notify the controller to send a status packet
+		// fmt.Println("compared they have more ",addr)
 		return
 	}
-
 	for key, value := range ourMap {
 		_, ok := theirMap[key]
 		if !ok { //they do not have our message
 			*response <- additional.SRResponsePacket{IP: addr, Origin: key, MessageID: 1}
+			// fmt.Println("compared we have more they dont have this msg ",addr)
 			return
 		} else if value > theirMap[key] {
 			*response <- additional.SRResponsePacket{IP: addr, Origin: key, MessageID: theirMap[key]}
+			// fmt.Println("compared we have a bigger message ",addr)
 			return
 		} else if value < theirMap[key] {
 			*response <- additional.SRResponsePacket{IP: addr, Origin: "SsendstatuspacketS", MessageID: 1} //notify the controller to send a status packet
+			// fmt.Println("compared they have more key",addr)
 			return
 		}
 	}
+
 	*response <- additional.SRResponsePacket{IP: addr, Origin: "AOKAOKAOK", MessageID: 1} //if we are equal
+	// fmt.Println("everything aok ",addr)
 }
 
 //the antiEntropy function will be run immediately on start up. TODO check if time should be seconds or milliseconds
@@ -185,7 +189,9 @@ func antiEntropy(status *additional.StatusMap, peers *additional.PeersMap, sendR
 		peerMp := peers.LoadAll()
 		if len(peerMp) > 0 {
 			//choose random peer
-			randomNum := rand.Intn(len(peerMp))
+			seed := rand.NewSource(time.Now().UnixNano()) //seeding
+			rng := rand.New(seed)
+			randomNum := rng.Intn(len(peerMp))
 			counter := 0
 			choosenPeer := ""
 			for i := range peerMp {
@@ -219,10 +225,10 @@ func listenToPeers(peers *additional.PeersMap, status *additional.StatusMap, gos
 	allMsg := make(map[string][]string) //origin, array of messages based on id, do ID - 1 when indexing as ids start from 1
 	ipToChan := make(map[string]chan int)
 	delChan := make(chan additional.SWResponse)
-	responseStatus := make(chan additional.SRResponsePacket)
+	responseStatus := make(chan additional.SRResponsePacket, 2)
 	antiEntropyChan := make(chan string)
 	messagesClient := make(chan additional.SWResponse, 10)
-	messagesPeers := make(chan additional.SWResponse, 1000)
+	messagesPeers := make(chan additional.SWResponse, 100)
 
 	go listenToClient(peers, ClientPort, gossiperAddr, nodeName, &messagesClient, status) //start listening for client messages
 
@@ -249,11 +255,12 @@ func listenToPeers(peers *additional.PeersMap, status *additional.StatusMap, gos
 		currPeers := peers.LoadAll() //current peers map[string]string
 
 		currentMsg := chanSWResponse(messagesPeers)
-		if len(currentMsg.IP) > 0 {
+		
+		for len(currentMsg.IP) > 0 {
 			gossipPack := &currentMsg.Packet
 			recvFrom := currentMsg.IP
 
-			currStatusPacket := status.CreateStatusPacket() //current status packet
+			
 
 			peersString := peers.ToString()
 
@@ -265,9 +272,6 @@ func listenToPeers(peers *additional.PeersMap, status *additional.StatusMap, gos
 
 			//1. Check the type of the message - status or message
 			if gossipPack.Rumor != nil {
-				//send a status packet
-				sendMsgToPeerExplicit(connection, recvFrom, additional.GossipPacket{Simple: nil, Rumor: nil, Status: currStatusPacket})
-
 				//print the rummor message and peers
 				fmt.Println("RUMOR origin", gossipPack.Rumor.Origin, "from", recvFrom, "ID", gossipPack.Rumor.ID, "contents", gossipPack.Rumor.Text)
 				fmt.Println("PEERS", peersString)
@@ -275,7 +279,7 @@ func listenToPeers(peers *additional.PeersMap, status *additional.StatusMap, gos
 				//2. Check if it is a new message or a completely new peer
 				value, existance := allMsg[gossipPack.Rumor.Origin]
 				if existance { //it is a peer that we already know
-					if uint32(len(value)) == gossipPack.Rumor.ID { //it is a new message and it is in order
+					if uint32(len(value)) == (gossipPack.Rumor.ID - 1) { //it is a new message and it is in order
 						latestRummor = *gossipPack
 
 						allMsg[gossipPack.Rumor.Origin] = append(value, gossipPack.Rumor.Text)                                     //add message to the map of messages
@@ -283,7 +287,7 @@ func listenToPeers(peers *additional.PeersMap, status *additional.StatusMap, gos
 						channelToUse := make(chan int, 2)                                                                          // I am not sure if 1 will block :P
 						randomPeer := getRandomPeer(currPeers)                                                                     //getting a random peer to start rummor mongering with
 						ipToChan[randomPeer] = channelToUse                                                                        //set the channel in the map
-						sendMsgToPeerExplicit(connection, randomPeer, *gossipPack)                                                 //send the message to the random peer
+						go sendMsgToPeerExplicit(connection, randomPeer, *gossipPack)                                                 //send the message to the random peer
 						go swMsgPeer(additional.SWResponse{IP: randomPeer, Packet: *gossipPack}, &channelToUse, &delChan, timeout) //the timeout started
 						fmt.Println("MONGERING with", randomPeer)
 					}
@@ -299,15 +303,15 @@ func listenToPeers(peers *additional.PeersMap, status *additional.StatusMap, gos
 						channelToUse := make(chan int, 2)                                                                          // I am not sure if 1 will block :P
 						randomPeer := getRandomPeer(currPeers)                                                                     //getting a random peer to start rummor mongering with
 						ipToChan[randomPeer] = channelToUse                                                                        //set the channel in the map
-						sendMsgToPeerExplicit(connection, randomPeer, *gossipPack)                                                 //send the message to the random peer
+						go sendMsgToPeerExplicit(connection, randomPeer, *gossipPack)                                                 //send the message to the random peer
 						go swMsgPeer(additional.SWResponse{IP: randomPeer, Packet: *gossipPack}, &channelToUse, &delChan, timeout) //the timeout started
 						fmt.Println("MONGERING with", randomPeer)
 					}
 				}
 
-			} else { //it is a status packet -- simply compare the packets then we check later the result through the channel
+			} else if gossipPack.Status != nil { //it is a status packet -- simply compare the packets then we check later the result through the channel
 				go printStatus(*gossipPack.Status, recvFrom, peers) //print status
-				compareStatus(status, gossipPack, &responseStatus, recvFrom)
+				go compareStatus(status, gossipPack.Status, &responseStatus, recvFrom)
 				//we also check if it is a response to one of our messages or just anti-entropy or the message has timeouted
 				value, existance := ipToChan[recvFrom]
 				if existance { //it exists
@@ -315,17 +319,23 @@ func listenToPeers(peers *additional.PeersMap, status *additional.StatusMap, gos
 					delete(ipToChan, recvFrom) //delete the entry
 				}
 
+			} else if gossipPack.Simple != nil {
+				fmt.Println("SIMPLE PACKET WTFFFFF")
 			}
+			//send a status packet
+			go sendMsgToPeerExplicit(connection, recvFrom, additional.GossipPacket{Simple: nil, Rumor: nil, Status: status.CreateStatusPacket()})
+			currentMsg = chanSWResponse(messagesPeers)
 		}
 
 		entropyRes := chanString(antiEntropyChan)
 		deleteRes := chanSWResponse(delChan)
 		responseRes := chanSRResponse(responseStatus)
-		clientRes := chanSWResponse(messagesClient)
+		
 
 		currStatusPacket := status.CreateStatusPacket()
 		if len(entropyRes) > 0 { //send the message to the peer set by anti entropy
-			sendMsgToPeerExplicit(connection, entropyRes, additional.GossipPacket{Simple: nil, Rumor: nil, Status: currStatusPacket})
+			fmt.Println("Antientropy packet")
+			go sendMsgToPeerExplicit(connection, entropyRes, additional.GossipPacket{Simple: nil, Rumor: nil, Status: currStatusPacket})
 		}
 		for len(deleteRes.IP) > 0 { //delete the ones that have timeouted and send those messages again
 			delete(ipToChan, deleteRes.IP) //deleting the entry
@@ -333,7 +343,7 @@ func listenToPeers(peers *additional.PeersMap, status *additional.StatusMap, gos
 			channelToUse := make(chan int, 2)
 			randomPeer := getRandomPeer(currPeers)
 			ipToChan[randomPeer] = channelToUse
-			sendMsgToPeerExplicit(connection, randomPeer, deleteRes.Packet)
+			go sendMsgToPeerExplicit(connection, randomPeer, deleteRes.Packet)
 			go swMsgPeer(additional.SWResponse{IP: randomPeer, Packet: deleteRes.Packet}, &channelToUse, &delChan, timeout)
 			fmt.Println("MONGERING with", randomPeer)
 
@@ -342,16 +352,18 @@ func listenToPeers(peers *additional.PeersMap, status *additional.StatusMap, gos
 		}
 		for responseRes.MessageID > 0 {
 			if responseRes.Origin == "SsendstatuspacketS" { //we send a status packet back
-				sendMsgToPeerExplicit(connection, responseRes.IP, additional.GossipPacket{Simple: nil, Rumor: nil, Status: currStatusPacket})
+				go sendMsgToPeerExplicit(connection, responseRes.IP, additional.GossipPacket{Simple: nil, Rumor: nil, Status: currStatusPacket})
 			} else if responseRes.Origin == "AOKAOKAOK" { //we are equal
 				fmt.Println("IN SYNC WITH", responseRes.IP)
-				coin := rand.Int() % 2
+				seed := rand.NewSource(time.Now().UnixNano()) //seeding
+				rng := rand.New(seed)
+				coin := rng.Int() % 2
 				if coin == 0 { //head we rummor monger
 					//start random rummor mongering
 					channelToUse := make(chan int, 2)
 					randomPeer := getRandomPeer(currPeers)
 					ipToChan[randomPeer] = channelToUse
-					sendMsgToPeerExplicit(connection, randomPeer, latestRummor) //we use the latest rummor cause sending another packet requires exhaustive handling of shit
+					go sendMsgToPeerExplicit(connection, randomPeer, latestRummor) //we use the latest rummor cause sending another packet requires exhaustive handling of shit
 					go swMsgPeer(additional.SWResponse{IP: randomPeer, Packet: latestRummor}, &channelToUse, &delChan, timeout)
 					fmt.Println("FLIPPED COIN sending rumor to", randomPeer)
 					fmt.Println("MONGERING with", randomPeer)
@@ -359,15 +371,18 @@ func listenToPeers(peers *additional.PeersMap, status *additional.StatusMap, gos
 			} else { // send a message from us
 				message := (allMsg[responseRes.Origin])[(responseRes.MessageID - 1)]
 				packet := additional.GossipPacket{Simple: nil, Rumor: &additional.RumorMessage{Origin: responseRes.Origin, ID: responseRes.MessageID, Text: message}, Status: nil}
-				sendMsgToPeerExplicit(connection, responseRes.IP, packet)
+				go sendMsgToPeerExplicit(connection, responseRes.IP, packet)
 				channelToUse := make(chan int, 2)
 				ipToChan[responseRes.IP] = channelToUse
 				go swMsgPeer(additional.SWResponse{IP: responseRes.IP, Packet: packet}, &channelToUse, &delChan, timeout)
 			}
 			responseRes = chanSRResponse(responseStatus) //check for more
 		}
+
+		clientRes := chanSWResponse(messagesClient)
 		for len(clientRes.IP) > 0 { //check if we received from client
-			sendMsgToPeerExplicit(connection, clientRes.IP, clientRes.Packet)
+			go sendMsgToPeerExplicit(connection, clientRes.IP, clientRes.Packet)
+			fmt.Println("CLIENT MONGERING with", clientRes.IP) 
 			channelToUse := make(chan int, 2)
 			ipToChan[clientRes.IP] = channelToUse
 			if clientRes.Packet.Rumor.ID == 1 {
@@ -382,6 +397,8 @@ func listenToPeers(peers *additional.PeersMap, status *additional.StatusMap, gos
 
 			clientRes = chanSWResponse(messagesClient)
 		}
+		
+		
 		//TODO we need also a channel for the server but I am not bitching now
 	}
 
@@ -406,7 +423,9 @@ func getRandomPeer(allPeers map[string]string) string {
 	if len(allPeers) == 0 {
 		return "127.0.0.1:443"
 	}
-	randomNum := rand.Intn(len(allPeers))
+	seed := rand.NewSource(time.Now().UnixNano()) //seeding
+	rng := rand.New(seed)
+	randomNum := rng.Intn(len(allPeers))
 	counter := 0
 	for i := range allPeers {
 		if counter == randomNum {
@@ -507,7 +526,9 @@ func listenToClient(peers *additional.PeersMap, PORT string, gossiperAddr string
 		if len(allPeers) == 0 {
 			choosenPeer = "127.0.0.1:443" //temporary
 		} else {
-			randomNum := rand.Intn(len(allPeers))
+			seed := rand.NewSource(time.Now().UnixNano()) //seeding
+			rng := rand.New(seed)
+			randomNum := rng.Intn(len(allPeers))
 			counter := 0
 			for i := range allPeers {
 				if counter == randomNum {
@@ -519,7 +540,7 @@ func listenToClient(peers *additional.PeersMap, PORT string, gossiperAddr string
 		}
 
 		//the unique name of the node nodeIP--nodeName
-		uniqueNodeName := gossiperAddr + "--" + nodeName
+		uniqueNodeName := nodeName //gossiperAddr + "--" + nodeName it will crash in the automated test
 
 		gossipPack := additional.GossipPacket{Simple: nil, Rumor: &additional.RumorMessage{ID: msgID, Origin: uniqueNodeName, Text: messageClient.Text}, Status: nil}
 		msgID = msgID + 1
