@@ -85,7 +85,7 @@ func (pm *PeersMap) StoreNotExists(key string) {
 
 //ToString - string the peers as ip:port delimited by a coma
 func (pm *PeersMap) ToString() string {
-	var resulting string = ""
+	var resulting string
 	pm.RLock()
 	if len(pm.peers) >= 1 {
 		for i := range pm.peers {
@@ -141,6 +141,11 @@ func (sp *StatusMap) CreateStatusPacket() *StatusPacket {
 func (sp *StatusMap) UpdateStatus(origin string, id uint32) bool {
 	sp.Lock()
 	val := sp.status[origin]
+	if val == 0 && id == 1{ //add new origin to our map
+		sp.status[origin] = 1
+		sp.Unlock()
+		return true
+	}
 	if val == id {
 		sp.status[origin] = val + 1
 		sp.Unlock()
@@ -169,4 +174,84 @@ type SRResponsePacket struct {
 type SWResponse struct {
 	IP     string
 	Packet GossipPacket
+}
+
+//IPChanMap - this map will be used to have ip channel mappings so that  when we are waiting for a status message we know which IP we are looking for
+type IPChanMap struct {
+	sync.RWMutex
+	ipChan map[string]chan int
+}
+
+//NewIPChanMap - initializing the IP channel map
+func NewIPChanMap() *IPChanMap {
+	channel := make(map[string]chan int)
+	return &IPChanMap{ipChan: channel}
+}
+
+//DeleteIfExists - deletes the entry from the ip chan map if it exists there; returns true if it succedes hence the value exists
+// This way even if we timeout delete the channel and then recieve the status and try to delete it again that won't be a problem
+//this is also called by the process waiting if he timeouts as to remove the number of channels needed, he might write to the
+//channel but that is not a problem as it will never read that value again
+func(ipc *IPChanMap) DeleteIfExists(ip string) bool{
+	ipc.Lock()
+	value, existence := ipc.ipChan[ip]
+	if existence {
+		value <- 1 //this is intended to kill the process waiting
+		delete(ipc.ipChan, ip)
+	}
+	ipc.Unlock()
+	return existence
+}
+
+//AddEntry - adds ip to the map and creates a new channel for that ip
+func(ipc *IPChanMap) AddEntry(ip string) *chan int{
+	channelToUse := make(chan int, 2)
+	ipc.Lock()
+	ipc.ipChan[ip] = channelToUse
+	ipc.Unlock()
+	return &channelToUse
+}
+
+//GetChannel - returns the channel for a given IP
+func(ipc *IPChanMap) GetChannel(ip string) *chan int{
+	ipc.RLock()
+	value, _ := ipc.ipChan[ip]
+	ipc.RUnlock()
+	return &value
+}
+
+//MsgMap - has all the messages with all origins
+type MsgMap struct {
+	sync.RWMutex
+	messages map[string][]string
+}
+
+//NewMsgMap - initializing the msg map
+func NewMsgMap() *MsgMap {
+	variable := make(map[string][]string)
+	return &MsgMap{messages: variable}
+}
+
+//AddMsg - add a message to the message map
+func (mm *MsgMap) AddMsg(origin string, msg string, id uint32) bool{
+	var status = false
+	mm.Lock()
+	value, _ := mm.messages[origin] //it returns an empty string array if it doesn't find anything so it still works
+	if uint32(len(value)) == id - 1 {
+		mm.messages[origin] = append(value, msg)
+		status = true
+	}
+	mm.Unlock()
+	return status
+}
+
+//GetMsg - returns the message from the given origin and index; index has to be the id of the message
+func (mm *MsgMap) GetMsg(origin string, ID uint32) string{
+	index := ID - 1
+	var toReturn string
+	mm.RLock()
+	value, _ := mm.messages[origin]
+	toReturn = value[index]
+	mm.RUnlock()
+	return toReturn
 }
