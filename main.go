@@ -298,7 +298,7 @@ func contRouteRummor(peers *additional.PeersMap, connection *net.UDPConn, rtimer
 }
 
 //listening to peer messages continuosly
-func listenToMessages(conn *net.UDPConn, peers *additional.PeersMap, msgs *additional.MsgMap, status *additional.StatusMap, ipchan *additional.IPChanMap, dsdv *additional.DSDVMap) {
+func listenToMessages(conn *net.UDPConn, peers *additional.PeersMap, msgs *additional.MsgMap, status *additional.StatusMap, ipchan *additional.IPChanMap, dsdv *additional.DSDVMap, pmsg *additional.PrivateMsgMap, ourName string) {
 	buffer := make([]byte, 1024)
 	var latestRumor additional.GossipPacket
 	for {
@@ -343,6 +343,20 @@ func listenToMessages(conn *net.UDPConn, peers *additional.PeersMap, msgs *addit
 			//we also check if it is a response to one of our messages or just anti-entropy or the message has timeouted
 			ipchan.DeleteIfExists(recvFrom.String())
 
+		} else if gossipPack.Private != nil {
+			privatePacket := *gossipPack.Private
+			if privatePacket.Destination == ourName {
+				pmsg.AddMsg(ourName, privatePacket.Text)
+				fmt.Println("PRIVATE origin", privatePacket.Origin, "hop-limit", privatePacket.HopLimit, "contents", privatePacket.Text)
+			} else {
+				if privatePacket.HopLimit > 0 {
+					privatePacket.HopLimit = privatePacket.HopLimit - 1
+					ipToSend := dsdv.GetIP(privatePacket.Destination)
+					packet := additional.GossipPacket{Simple: nil, Rumor: nil, Status: nil, Private: &privatePacket}
+					sendMsgToPeerExplicit(conn, ipToSend, packet)
+				}
+			}
+
 		} else { //TODO handle simple messages
 
 		}
@@ -352,7 +366,7 @@ func listenToMessages(conn *net.UDPConn, peers *additional.PeersMap, msgs *addit
 
 //this function starts everything practically
 func bootstrap(peers *additional.PeersMap, status *additional.StatusMap, msgs *additional.MsgMap, ipchan *additional.IPChanMap,
-	gossiperAddr string, ClientPort string, nodeName string, entropyTimeout int, dsdv *additional.DSDVMap, rtimer int) {
+	gossiperAddr string, ClientPort string, nodeName string, entropyTimeout int, dsdv *additional.DSDVMap, rtimer int, pmsg *additional.PrivateMsgMap) {
 
 	//setup the connection
 	addr, err := net.ResolveUDPAddr("udp4", gossiperAddr)
@@ -368,11 +382,11 @@ func bootstrap(peers *additional.PeersMap, status *additional.StatusMap, msgs *a
 	}
 
 	//start listening for client messages
-	go listenToClient(peers, ClientPort, nodeName, status, ipchan, msgs, connection, rtimer)
+	go listenToClient(peers, ClientPort, nodeName, status, ipchan, msgs, connection, rtimer, pmsg, dsdv)
 	//start anti entropy
 	go antiEntropy(status, peers, connection, entropyTimeout)
 	//strat listening for messages from peers
-	listenToMessages(connection, peers, msgs, status, ipchan, dsdv)
+	listenToMessages(connection, peers, msgs, status, ipchan, dsdv, pmsg, nodeName)
 
 }
 
@@ -492,7 +506,8 @@ func insertNewOriginP(status *additional.StatusMap, origin string) {
 }
 
 //function is used only when the simple flag is false; sends the client message to a random peer
-func listenToClient(peers *additional.PeersMap, PORT string, nodeName string, status *additional.StatusMap, ipchan *additional.IPChanMap, msgs *additional.MsgMap, conn *net.UDPConn, rtimer int) {
+func listenToClient(peers *additional.PeersMap, PORT string, nodeName string, status *additional.StatusMap, ipchan *additional.IPChanMap,
+	msgs *additional.MsgMap, conn *net.UDPConn, rtimer int, pmsg *additional.PrivateMsgMap, dsdv *additional.DSDVMap) {
 	//the ID of the messages that will be sent from the client
 	id := additional.InitializeID()
 
@@ -521,26 +536,39 @@ func listenToClient(peers *additional.PeersMap, PORT string, nodeName string, st
 		connection.ReadFromUDP(buffer)         //n, addr, err
 		protobuf.Decode(buffer, messageClient) //decode the message
 
-		//increment id
-		msgID := id.IncID()
+		//check the type of message from the client
+		if len(*messageClient.Destination) > 0 {
+			fmt.Println("CLIENT MESSAGE", messageClient.Text, "dest", *messageClient.Destination)
+			//add client message to the private message map
+			pmsg.AddMsg(nodeName, messageClient.Text)
+			//send the private message to the next one
+			ipToSend := dsdv.GetIP(*messageClient.Destination)
+			privateMsg := &additional.PrivateMessage{Origin: nodeName, ID: 0, Text: messageClient.Text, Destination: *messageClient.Destination, HopLimit: 9} //consider hop as 10 since it is decremented here immediately
+			gossipPack := additional.GossipPacket{Simple: nil, Rumor: nil, Status: nil, Private: privateMsg}
+			sendMsgToPeerExplicit(conn, ipToSend, gossipPack)
 
-		//the unique name of the node nodeIP--nodeName
-		uniqueNodeName := nodeName //gossiperAddr + "--" + nodeName it will crash in the automated test
-
-		gossipPack := additional.GossipPacket{Simple: nil, Rumor: &additional.RumorMessage{ID: msgID, Origin: uniqueNodeName, Text: messageClient.Text}, Status: nil, Private: nil}
-
-		msgs.AddMsg(uniqueNodeName, messageClient.Text, msgID)
-
-		if msgID == 1 { //update our status for our messages
-			status.InsertNewOrigin(uniqueNodeName)
 		} else {
-			status.UpdateStatus(uniqueNodeName, msgID)
+			//increment id
+			msgID := id.IncID()
+
+			//the unique name of the node nodeIP--nodeName
+			uniqueNodeName := nodeName //gossiperAddr + "--" + nodeName it will crash in the automated test
+
+			gossipPack := additional.GossipPacket{Simple: nil, Rumor: &additional.RumorMessage{ID: msgID, Origin: uniqueNodeName, Text: messageClient.Text}, Status: nil, Private: nil}
+
+			msgs.AddMsg(uniqueNodeName, messageClient.Text, msgID)
+
+			if msgID == 1 { //update our status for our messages
+				status.InsertNewOrigin(uniqueNodeName)
+			} else {
+				status.UpdateStatus(uniqueNodeName, msgID)
+			}
+
+			fmt.Println("CLIENT MESSAGE", messageClient.Text) //Printing the client message
+
+			//send the message to a random peer
+			sendRandomPeer(peers, conn, ipchan, gossipPack)
 		}
-
-		fmt.Println("CLIENT MESSAGE", messageClient.Text) //Printing the client message
-
-		//send the message to a random peer
-		sendRandomPeer(peers, conn, ipchan, gossipPack)
 	}
 }
 
@@ -576,6 +604,8 @@ func main() {
 	msgs := additional.NewMsgMap()
 	//DSDV map
 	dsdv := additional.NewDSDVMap()
+	//private messages map
+	pmsg := additional.NewPrivateMsgMap()
 
 	PORT := ":" + strconv.Itoa(UIPort)
 
@@ -585,7 +615,7 @@ func main() {
 		//listening for messages from peers
 		listenToPeersSimple(peers, gossipAddr)
 	} else {
-		bootstrap(peers, status, msgs, ipchan, gossipAddr, PORT, nodeName, antiEntropyTimeout, dsdv, rtimer)
+		bootstrap(peers, status, msgs, ipchan, gossipAddr, PORT, nodeName, antiEntropyTimeout, dsdv, rtimer, pmsg)
 	}
 
 }
