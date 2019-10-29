@@ -15,14 +15,27 @@ type SimpleMessage struct {
 //GossipPacket struct
 //Updated to include rumor message and status packets
 type GossipPacket struct {
-	Simple *SimpleMessage
-	Rumor  *RumorMessage
-	Status *StatusPacket
+	Simple  *SimpleMessage
+	Rumor   *RumorMessage
+	Status  *StatusPacket
+	Private *PrivateMessage
 }
 
 //Message - simple message struct
 type Message struct {
-	Text string
+	Text        string
+	Destination *string
+	File        *string
+	Request     *[]byte
+}
+
+//PrivateMessage is the struct used to send private messages between two peers
+type PrivateMessage struct {
+	Origin      string
+	ID          uint32
+	Text        string
+	Destination string
+	HopLimit    uint32
 }
 
 //RumorMessage struct - is the new type of message that will propagate through the network
@@ -141,7 +154,7 @@ func (sp *StatusMap) CreateStatusPacket() *StatusPacket {
 func (sp *StatusMap) UpdateStatus(origin string, id uint32) bool {
 	sp.Lock()
 	val := sp.status[origin]
-	if val == 0 && id == 1{ //add new origin to our map
+	if val == 0 && id == 1 { //add new origin to our map
 		sp.status[origin] = 1
 		sp.Unlock()
 		return true
@@ -192,7 +205,7 @@ func NewIPChanMap() *IPChanMap {
 // This way even if we timeout delete the channel and then recieve the status and try to delete it again that won't be a problem
 //this is also called by the process waiting if he timeouts as to remove the number of channels needed, he might write to the
 //channel but that is not a problem as it will never read that value again
-func(ipc *IPChanMap) DeleteIfExists(ip string) bool{
+func (ipc *IPChanMap) DeleteIfExists(ip string) bool {
 	ipc.Lock()
 	value, existence := ipc.ipChan[ip]
 	if existence {
@@ -204,7 +217,7 @@ func(ipc *IPChanMap) DeleteIfExists(ip string) bool{
 }
 
 //AddEntry - adds ip to the map and creates a new channel for that ip
-func(ipc *IPChanMap) AddEntry(ip string) *chan int{
+func (ipc *IPChanMap) AddEntry(ip string) *chan int {
 	channelToUse := make(chan int, 2)
 	ipc.Lock()
 	ipc.ipChan[ip] = channelToUse
@@ -213,7 +226,7 @@ func(ipc *IPChanMap) AddEntry(ip string) *chan int{
 }
 
 //GetChannel - returns the channel for a given IP
-func(ipc *IPChanMap) GetChannel(ip string) *chan int{
+func (ipc *IPChanMap) GetChannel(ip string) *chan int {
 	ipc.RLock()
 	value, _ := ipc.ipChan[ip]
 	ipc.RUnlock()
@@ -233,11 +246,11 @@ func NewMsgMap() *MsgMap {
 }
 
 //AddMsg - add a message to the message map
-func (mm *MsgMap) AddMsg(origin string, msg string, id uint32) bool{
+func (mm *MsgMap) AddMsg(origin string, msg string, id uint32) bool {
 	var status = false
 	mm.Lock()
 	value, _ := mm.messages[origin] //it returns an empty string array if it doesn't find anything so it still works
-	if uint32(len(value)) == id - 1 {
+	if uint32(len(value)) == id-1 {
 		mm.messages[origin] = append(value, msg)
 		status = true
 	}
@@ -246,7 +259,7 @@ func (mm *MsgMap) AddMsg(origin string, msg string, id uint32) bool{
 }
 
 //GetMsg - returns the message from the given origin and index; index has to be the id of the message
-func (mm *MsgMap) GetMsg(origin string, ID uint32) string{
+func (mm *MsgMap) GetMsg(origin string, ID uint32) string {
 	index := ID - 1
 	var toReturn string
 	mm.RLock()
@@ -269,7 +282,7 @@ func NewDSDVMap() *DSDVMap {
 }
 
 //UpdateDSDV - shouldAdd parameter is passed as the result from update status
-func (dsdv *DSDVMap) UpdateDSDV(origin string, ip string, shouldAdd bool){
+func (dsdv *DSDVMap) UpdateDSDV(origin string, ip string, shouldAdd bool) {
 	if shouldAdd {
 		dsdv.Lock()
 		dsdv.dsdv[origin] = ip
@@ -278,9 +291,29 @@ func (dsdv *DSDVMap) UpdateDSDV(origin string, ip string, shouldAdd bool){
 }
 
 //GetIP - returns the IP that we should send the message concerning the current Origin given
-func (dsdv *DSDVMap) GetIP(origin string) string{
+func (dsdv *DSDVMap) GetIP(origin string) string {
 	dsdv.RLock()
 	val, _ := dsdv.dsdv[origin] //empty if there is no such IP, but this should not happen since if someone sends a message for us to route that means they got a message from that origin through us
 	dsdv.RUnlock()
+	return val
+}
+
+//ID struct since the rtimer will use it with the client
+type ID struct {
+	sync.Mutex
+	id uint32
+}
+
+//InitializeID initializes the id
+func InitializeID() *ID {
+	return &ID{id: 0}
+}
+
+//IncID - increments the id by one and returns the result
+func (id *ID) IncID() uint32 {
+	id.Lock()
+	val := id.id + 1
+	id.id = val
+	id.Unlock()
 	return val
 }

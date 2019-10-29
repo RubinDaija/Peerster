@@ -96,7 +96,7 @@ func listenToClientSimple(peers *additional.PeersMap, PORT string, gossiperAddr 
 		protobuf.Decode(buffer, message) //decode the message
 		fmt.Println("CLIENT MESSAGE", message.Text)
 		// fmt.Println("PEERS ", peers.ToString()) //Do not print the peers when the client receives a message Apperently
-		gossipPack := &additional.GossipPacket{Simple: &additional.SimpleMessage{OriginalName: nodeName, RelayPeerAddr: gossiperAddr, Contents: message.Text}, Rumor: nil, Status: nil}
+		gossipPack := &additional.GossipPacket{Simple: &additional.SimpleMessage{OriginalName: nodeName, RelayPeerAddr: gossiperAddr, Contents: message.Text}, Rumor: nil, Status: nil, Private: nil}
 		gossipPack.Simple.RelayPeerAddr = gossiperAddr
 		gossipPack.Simple.OriginalName = nodeName
 		go sendMsgToAllPeers(peers, *gossipPack) //create a new thread so that this thread starts to listen again
@@ -173,17 +173,17 @@ func compareStatus(ourStatus *additional.StatusMap, theirStatus additional.Statu
 		theirMap[stat.Identifier] = stat.NextID
 		//at the same time do the comparison them with us
 		ourID, existence := ourMap[stat.Identifier]
-		if !existence{ //if we dont have it we simply send a status packet
-			packet := additional.GossipPacket{Simple: nil, Rumor: nil, Status: ourStatus.CreateStatusPacket()}
+		if !existence { //if we dont have it we simply send a status packet
+			packet := additional.GossipPacket{Simple: nil, Rumor: nil, Status: ourStatus.CreateStatusPacket(), Private: nil}
 			sendMsgToPeerExplicit(conn, peer, packet)
 			return
-		} else if ourID < stat.NextID{ //we don't have the most up to date version so we send a status packet
-			packet := additional.GossipPacket{Simple: nil, Rumor: nil, Status: ourStatus.CreateStatusPacket()}
+		} else if ourID < stat.NextID { //we don't have the most up to date version so we send a status packet
+			packet := additional.GossipPacket{Simple: nil, Rumor: nil, Status: ourStatus.CreateStatusPacket(), Private: nil}
 			sendMsgToPeerExplicit(conn, peer, packet)
 			return
-		}else if stat.NextID < ourID{ //we have the most up to date version
+		} else if stat.NextID < ourID { //we have the most up to date version
 			content := allmsg.GetMsg(stat.Identifier, stat.NextID)
-			packet := additional.GossipPacket{Simple: nil, Rumor: &additional.RumorMessage{Origin: stat.Identifier, ID:stat.NextID, Text: content}}
+			packet := additional.GossipPacket{Simple: nil, Rumor: &additional.RumorMessage{Origin: stat.Identifier, ID: stat.NextID, Text: content}, Private: nil}
 			channel := ipchan.AddEntry(peer)
 			go swMsgPeer(ipchan, channel, peers, conn, packet, peer, waitingTimeout)
 			sendMsgToPeerExplicit(conn, peer, packet)
@@ -196,19 +196,19 @@ func compareStatus(ourStatus *additional.StatusMap, theirStatus additional.Statu
 		theirID, existence := theirMap[identifier]
 		if !existence {
 			content := allmsg.GetMsg(identifier, 1) //they do not have these set of messages so they need to go in order
-			packet := additional.GossipPacket{Simple: nil, Rumor: &additional.RumorMessage{Origin: identifier, ID:1, Text: content}}
+			packet := additional.GossipPacket{Simple: nil, Rumor: &additional.RumorMessage{Origin: identifier, ID: 1, Text: content}, Private: nil}
 			channel := ipchan.AddEntry(peer)
 			go swMsgPeer(ipchan, channel, peers, conn, packet, peer, waitingTimeout)
 			sendMsgToPeerExplicit(conn, peer, packet)
 			fmt.Println("MONGERING with", peer)
 			return
-		} else if ourID < theirID{
-			packet := additional.GossipPacket{Simple: nil, Rumor: nil, Status: ourStatus.CreateStatusPacket()}
+		} else if ourID < theirID {
+			packet := additional.GossipPacket{Simple: nil, Rumor: nil, Status: ourStatus.CreateStatusPacket(), Private: nil}
 			sendMsgToPeerExplicit(conn, peer, packet)
 			return
-		}else if theirID < ourID{ //we have the most up to date version
+		} else if theirID < ourID { //we have the most up to date version
 			content := allmsg.GetMsg(identifier, theirID)
-			packet := additional.GossipPacket{Simple: nil, Rumor: &additional.RumorMessage{Origin: identifier, ID:theirID, Text: content}}
+			packet := additional.GossipPacket{Simple: nil, Rumor: &additional.RumorMessage{Origin: identifier, ID: theirID, Text: content}, Private: nil}
 			channel := ipchan.AddEntry(peer)
 			go swMsgPeer(ipchan, channel, peers, conn, packet, peer, waitingTimeout)
 			sendMsgToPeerExplicit(conn, peer, packet)
@@ -251,11 +251,49 @@ func antiEntropy(status *additional.StatusMap, peers *additional.PeersMap, conne
 				}
 				counter = counter + 1
 			}
-			packet := additional.GossipPacket{Simple: nil, Rumor: nil, Status: status.CreateStatusPacket()}
+			packet := additional.GossipPacket{Simple: nil, Rumor: nil, Status: status.CreateStatusPacket(), Private: nil}
 			//send the peer choosen
 			sendMsgToPeerExplicit(connection, choosenPeer, packet)
 		}
 
+	}
+}
+
+//this function sends a route rummor every rtime seconds
+func contRouteRummor(peers *additional.PeersMap, connection *net.UDPConn, rtimer int, id *additional.ID, ourName string) {
+	if rtimer > 0 {
+		//bcast route rummor first time to all peers
+		msgID := id.IncID()
+		rumorPacket := &additional.RumorMessage{Origin: ourName, ID: msgID, Text: ""}
+		packet := additional.GossipPacket{Simple: nil, Rumor: rumorPacket, Status: nil, Private: nil}
+		sendMsgToAllPeers(peers, packet)
+
+		ticker := time.NewTicker(time.Duration(rtimer) * time.Second)
+		select {
+		case <-ticker.C:
+			peerMp := peers.LoadAll()
+			if len(peerMp) > 0 { //we only can start if we have peers
+				//choose random peer
+				seed := rand.NewSource(time.Now().UnixNano()) //seeding
+				rng := rand.New(seed)
+				randomNum := rng.Intn(len(peerMp))
+				counter := 0
+				choosenPeer := ""
+				for i := range peerMp {
+					if counter == randomNum {
+						choosenPeer = i
+						break
+					}
+					counter = counter + 1
+				}
+				msgID = id.IncID()
+				rumorPacket = &additional.RumorMessage{Origin: ourName, ID: msgID, Text: ""}
+				packet = additional.GossipPacket{Simple: nil, Rumor: rumorPacket, Status: nil, Private: nil}
+				//send the peer choosen
+				sendMsgToPeerExplicit(connection, choosenPeer, packet)
+			}
+
+		}
 	}
 }
 
@@ -274,10 +312,10 @@ func listenToMessages(conn *net.UDPConn, peers *additional.PeersMap, msgs *addit
 		peersString := peers.ToString()
 
 		//send a status packet
-		go sendMsgToPeerExplicit(conn, recvFrom.String(), additional.GossipPacket{Simple: nil, Rumor: nil, Status: status.CreateStatusPacket()})
+		go sendMsgToPeerExplicit(conn, recvFrom.String(), additional.GossipPacket{Simple: nil, Rumor: nil, Status: status.CreateStatusPacket(), Private: nil})
 
 		//Check the type of the packet
-		if gossipPack.Rumor != nil{
+		if gossipPack.Rumor != nil {
 			latestRumor = *gossipPack
 			//print the rummor message and peers
 			fmt.Println("RUMOR origin", gossipPack.Rumor.Origin, "from", recvFrom.String(), "ID", gossipPack.Rumor.ID, "contents", gossipPack.Rumor.Text)
@@ -289,14 +327,15 @@ func listenToMessages(conn *net.UDPConn, peers *additional.PeersMap, msgs *addit
 			updateStatusRes := status.UpdateStatus(gossipPack.Rumor.Origin, gossipPack.Rumor.ID)
 
 			//update dsdv table if necessary
-			if (len(gossipPack.Rumor.Origin) > 0){
-				go dsdv.UpdateDSDV(gossipPack.Rumor.Origin, recvFrom.String(), updateStatusRes)
+			go dsdv.UpdateDSDV(gossipPack.Rumor.Origin, recvFrom.String(), updateStatusRes)
+			if len(gossipPack.Rumor.Origin) > 0 && updateStatusRes {
+				fmt.Println("DSDV", gossipPack.Rumor.Origin, recvFrom.String())
 			}
 
 			//start random rumor mongering
 			go sendRandomPeer(peers, conn, ipchan, *gossipPack)
 
-		}else if gossipPack.Status != nil{
+		} else if gossipPack.Status != nil {
 			//print status
 			go printStatus(*gossipPack.Status, recvFrom.String(), peers)
 			//compare statuses
@@ -304,7 +343,7 @@ func listenToMessages(conn *net.UDPConn, peers *additional.PeersMap, msgs *addit
 			//we also check if it is a response to one of our messages or just anti-entropy or the message has timeouted
 			ipchan.DeleteIfExists(recvFrom.String())
 
-		} else{ //TODO handle simple messages
+		} else { //TODO handle simple messages
 
 		}
 
@@ -313,7 +352,7 @@ func listenToMessages(conn *net.UDPConn, peers *additional.PeersMap, msgs *addit
 
 //this function starts everything practically
 func bootstrap(peers *additional.PeersMap, status *additional.StatusMap, msgs *additional.MsgMap, ipchan *additional.IPChanMap,
-	gossiperAddr string, ClientPort string, nodeName string, entropyTimeout int, dsdv *additional.DSDVMap) {
+	gossiperAddr string, ClientPort string, nodeName string, entropyTimeout int, dsdv *additional.DSDVMap, rtimer int) {
 
 	//setup the connection
 	addr, err := net.ResolveUDPAddr("udp4", gossiperAddr)
@@ -329,12 +368,11 @@ func bootstrap(peers *additional.PeersMap, status *additional.StatusMap, msgs *a
 	}
 
 	//start listening for client messages
-	go listenToClient(peers, ClientPort, nodeName, status, ipchan, msgs, connection)
+	go listenToClient(peers, ClientPort, nodeName, status, ipchan, msgs, connection, rtimer)
 	//start anti entropy
 	go antiEntropy(status, peers, connection, entropyTimeout)
 	//strat listening for messages from peers
 	listenToMessages(connection, peers, msgs, status, ipchan, dsdv)
-
 
 }
 
@@ -372,9 +410,9 @@ func getRandomPeer(allPeers map[string]string) string {
 }
 
 //sends the message to a random peer
-func sendRandomPeer(peers *additional.PeersMap, conn *net.UDPConn, ipchan *additional.IPChanMap, packet additional.GossipPacket) string{
+func sendRandomPeer(peers *additional.PeersMap, conn *net.UDPConn, ipchan *additional.IPChanMap, packet additional.GossipPacket) string {
 	allPeers := peers.LoadAll()
-	if len(allPeers) > 0{
+	if len(allPeers) > 0 {
 		var chosen string
 		seed := rand.NewSource(time.Now().UnixNano()) //seeding
 		rng := rand.New(seed)
@@ -389,20 +427,21 @@ func sendRandomPeer(peers *additional.PeersMap, conn *net.UDPConn, ipchan *addit
 		}
 
 		channel := ipchan.AddEntry(chosen)
-		sendMsgToPeerExplicit(conn, chosen, packet)                                                 //send the message to the random peer
+		sendMsgToPeerExplicit(conn, chosen, packet)                                //send the message to the random peer
 		go swMsgPeer(ipchan, channel, peers, conn, packet, chosen, waitingTimeout) //the timeout started
 		fmt.Println("MONGERING with", chosen)
 		return chosen
 	}
 	return ""
 }
+
 //read channels in a nonblocking manner
 func chanSWResponse(channel chan additional.SWResponse) additional.SWResponse {
 	select {
 	case res := <-channel:
 		return res
 	default:
-		return additional.SWResponse{IP: "", Packet: additional.GossipPacket{Simple: nil, Rumor: nil, Status: nil}} //check if IP is empty to know that we did not receive anything
+		return additional.SWResponse{IP: "", Packet: additional.GossipPacket{Simple: nil, Rumor: nil, Status: nil, Private: nil}} //check if IP is empty to know that we did not receive anything
 	}
 }
 
@@ -438,7 +477,7 @@ func chanGossipPacket(channel chan additional.GossipPacket) additional.GossipPac
 	case res := <-channel:
 		return res
 	default:
-		return additional.GossipPacket{Simple: nil, Rumor: nil, Status: nil}
+		return additional.GossipPacket{Simple: nil, Rumor: nil, Status: nil, Private: nil}
 	}
 }
 
@@ -453,9 +492,12 @@ func insertNewOriginP(status *additional.StatusMap, origin string) {
 }
 
 //function is used only when the simple flag is false; sends the client message to a random peer
-func listenToClient(peers *additional.PeersMap, PORT string, nodeName string, status *additional.StatusMap, ipchan *additional.IPChanMap, msgs *additional.MsgMap, conn *net.UDPConn) {
+func listenToClient(peers *additional.PeersMap, PORT string, nodeName string, status *additional.StatusMap, ipchan *additional.IPChanMap, msgs *additional.MsgMap, conn *net.UDPConn, rtimer int) {
 	//the ID of the messages that will be sent from the client
-	var msgID uint32 = 1 //first message id is 1
+	id := additional.InitializeID()
+
+	//start the contRouteRummor
+	go contRouteRummor(peers, conn, rtimer, id, nodeName)
 
 	//setup the connection
 	addr, err := net.ResolveUDPAddr("udp4", PORT)
@@ -479,10 +521,13 @@ func listenToClient(peers *additional.PeersMap, PORT string, nodeName string, st
 		connection.ReadFromUDP(buffer)         //n, addr, err
 		protobuf.Decode(buffer, messageClient) //decode the message
 
+		//increment id
+		msgID := id.IncID()
+
 		//the unique name of the node nodeIP--nodeName
 		uniqueNodeName := nodeName //gossiperAddr + "--" + nodeName it will crash in the automated test
 
-		gossipPack := additional.GossipPacket{Simple: nil, Rumor: &additional.RumorMessage{ID: msgID, Origin: uniqueNodeName, Text: messageClient.Text}, Status: nil}
+		gossipPack := additional.GossipPacket{Simple: nil, Rumor: &additional.RumorMessage{ID: msgID, Origin: uniqueNodeName, Text: messageClient.Text}, Status: nil, Private: nil}
 
 		msgs.AddMsg(uniqueNodeName, messageClient.Text, msgID)
 
@@ -496,10 +541,6 @@ func listenToClient(peers *additional.PeersMap, PORT string, nodeName string, st
 
 		//send the message to a random peer
 		sendRandomPeer(peers, conn, ipchan, gossipPack)
-
-		//update the message ID for the next message
-		msgID = msgID + 1
-
 	}
 }
 
@@ -511,6 +552,7 @@ func main() {
 	var peersIn string
 	var simpleStat bool
 	var antiEntropyTimeout int
+	var rtimer int
 
 	//Setting up the flags
 	flag.IntVar(&UIPort, "UIPort", 6969, "User input port")
@@ -519,6 +561,7 @@ func main() {
 	flag.StringVar(&peersIn, "peers", "", "List of peers")
 	flag.BoolVar(&simpleStat, "simple", false, "Simple flag makes the gossiper run in simple mode")
 	flag.IntVar(&antiEntropyTimeout, "antiEntropy", 10, "anti entropy value")
+	flag.IntVar(&rtimer, "rtimer", 0, "rtimer value")
 
 	flag.Parse()
 
@@ -539,10 +582,10 @@ func main() {
 	if simpleStat { //go in broadcast mode
 		//start the new thread for listening to the client
 		go listenToClientSimple(peers, PORT, gossipAddr, nodeName)
-		 //listening for messages from peers
+		//listening for messages from peers
 		listenToPeersSimple(peers, gossipAddr)
 	} else {
-		bootstrap(peers, status, msgs, ipchan, gossipAddr, PORT, nodeName, antiEntropyTimeout, dsdv)
+		bootstrap(peers, status, msgs, ipchan, gossipAddr, PORT, nodeName, antiEntropyTimeout, dsdv, rtimer)
 	}
 
 }
