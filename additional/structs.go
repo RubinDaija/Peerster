@@ -255,3 +255,32 @@ func (mm *MsgMap) GetMsg(origin string, ID uint32) string{
 	mm.RUnlock()
 	return toReturn
 }
+
+//DSDVMap Will hold the origin IP:port combo
+type DSDVMap struct {
+	sync.RWMutex
+	dsdv map[string]string
+}
+
+//NewDSDVMap - initializing the dsdv map
+func NewDSDVMap() *DSDVMap {
+	variable := make(map[string]string)
+	return &DSDVMap{dsdv: variable}
+}
+
+//UpdateDSDV - shouldAdd parameter is passed as the result from update status
+func (dsdv *DSDVMap) UpdateDSDV(origin string, ip string, shouldAdd bool){
+	if shouldAdd {
+		dsdv.Lock()
+		dsdv.dsdv[origin] = ip
+		dsdv.Unlock()
+	}
+}
+
+//GetIP - returns the IP that we should send the message concerning the current Origin given
+func (dsdv *DSDVMap) GetIP(origin string) string{
+	dsdv.RLock()
+	val, _ := dsdv.dsdv[origin] //empty if there is no such IP, but this should not happen since if someone sends a message for us to route that means they got a message from that origin through us
+	dsdv.RUnlock()
+	return val
+}

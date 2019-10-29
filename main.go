@@ -1,8 +1,5 @@
 package main
 
-//TODO: rumormongering for client done , now only other peers left --dont forget to get now the peer relay address from the udp connection
-//TODO: save all the messages sent since we need to send them to other peers as well -- easiest way is a map[strin <origin>][]string<array indexable by ID>
-//      The only problem here is that the array needs to be flexible just like an array list in java
 //Gossiper
 import (
 	"Peerster/additional"
@@ -263,7 +260,7 @@ func antiEntropy(status *additional.StatusMap, peers *additional.PeersMap, conne
 }
 
 //listening to peer messages continuosly
-func listenToMessages(conn *net.UDPConn, peers *additional.PeersMap, msgs *additional.MsgMap, status *additional.StatusMap, ipchan *additional.IPChanMap) {
+func listenToMessages(conn *net.UDPConn, peers *additional.PeersMap, msgs *additional.MsgMap, status *additional.StatusMap, ipchan *additional.IPChanMap, dsdv *additional.DSDVMap) {
 	buffer := make([]byte, 1024)
 	var latestRumor additional.GossipPacket
 	for {
@@ -289,7 +286,13 @@ func listenToMessages(conn *net.UDPConn, peers *additional.PeersMap, msgs *addit
 			//store message
 			msgs.AddMsg(gossipPack.Rumor.Origin, gossipPack.Rumor.Text, gossipPack.Rumor.ID)
 			//update the status of our node
-			status.UpdateStatus(gossipPack.Rumor.Origin, gossipPack.Rumor.ID)
+			updateStatusRes := status.UpdateStatus(gossipPack.Rumor.Origin, gossipPack.Rumor.ID)
+
+			//update dsdv table if necessary
+			if (len(gossipPack.Rumor.Origin) > 0){
+				go dsdv.UpdateDSDV(gossipPack.Rumor.Origin, recvFrom.String(), updateStatusRes)
+			}
+
 			//start random rumor mongering
 			go sendRandomPeer(peers, conn, ipchan, *gossipPack)
 
@@ -309,7 +312,8 @@ func listenToMessages(conn *net.UDPConn, peers *additional.PeersMap, msgs *addit
 }
 
 //this function starts everything practically
-func bootstrap(peers *additional.PeersMap, status *additional.StatusMap, msgs *additional.MsgMap, ipchan *additional.IPChanMap, gossiperAddr string, ClientPort string, nodeName string, entropyTimeout int) {
+func bootstrap(peers *additional.PeersMap, status *additional.StatusMap, msgs *additional.MsgMap, ipchan *additional.IPChanMap,
+	gossiperAddr string, ClientPort string, nodeName string, entropyTimeout int, dsdv *additional.DSDVMap) {
 
 	//setup the connection
 	addr, err := net.ResolveUDPAddr("udp4", gossiperAddr)
@@ -329,7 +333,7 @@ func bootstrap(peers *additional.PeersMap, status *additional.StatusMap, msgs *a
 	//start anti entropy
 	go antiEntropy(status, peers, connection, entropyTimeout)
 	//strat listening for messages from peers
-	listenToMessages(connection, peers, msgs, status, ipchan)
+	listenToMessages(connection, peers, msgs, status, ipchan, dsdv)
 
 
 }
@@ -527,6 +531,8 @@ func main() {
 	ipchan := additional.NewIPChanMap()
 	//Messages map
 	msgs := additional.NewMsgMap()
+	//DSDV map
+	dsdv := additional.NewDSDVMap()
 
 	PORT := ":" + strconv.Itoa(UIPort)
 
@@ -536,7 +542,7 @@ func main() {
 		 //listening for messages from peers
 		listenToPeersSimple(peers, gossipAddr)
 	} else {
-		bootstrap(peers, status, msgs, ipchan, gossipAddr, PORT, nodeName, antiEntropyTimeout)
+		bootstrap(peers, status, msgs, ipchan, gossipAddr, PORT, nodeName, antiEntropyTimeout, dsdv)
 	}
 
 }
