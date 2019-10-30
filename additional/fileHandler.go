@@ -1,8 +1,10 @@
 package additional
 
 import (
+	"Peerster/protobuf"
 	"crypto/sha256"
 	"encoding/hex"
+	"net"
 	"os"
 	"sync"
 )
@@ -97,7 +99,7 @@ func (f *Files) AddNewFile(fileName string) {
 
 }
 
-//CheckNReturnChunk checks if we have a particular chunk and then we return it
+//CheckNReturnChunk checks if we have a particular chunk and then we return it, if we don't have it then the result will be empty
 func (f *Files) CheckNReturnChunk(hash string) []byte {
 	var result []byte
 	f.RLock()
@@ -116,6 +118,36 @@ func (f *Files) CheckNReturnChunk(hash string) []byte {
 }
 
 //StoreNewChunk checks the sha256 of the chunk and then if we need it stores it
-func (f *Files) StoreNewChunk(chunk []byte, hash []byte) {
+func (f *Files) StoreNewChunk(chunk []byte, hash []byte) bool {
+
+}
+
+//SendRequestedChunk sends the requested file chunk to the peer; supposes hop limit is already decremented and also that we are the destination
+//We are also supposed to pass the peer to whom the reply should be sent to.
+func (f *Files) SendRequestedChunk(dr DataRequest, conn *net.UDPConn, peer string) {
+	f.RLock()
+	hashStr := hex.EncodeToString(dr.HashValue)
+	var resultChunk []byte
+	//check if we have the chunk
+	_, existance := f.allChunks[hashStr]
+	if existance {
+		fileChunk := make([]byte, 8192)
+		file, err := os.Open("cache" + hashStr)
+		check(err)
+		noRead, err := file.Read(fileChunk)
+		check(err)
+		resultChunk = fileChunk[:noRead]
+		file.Close()
+	}
+	dreply := DataReply{Origin: dr.Origin, Destination: dr.Destination, HopLimit: dr.HopLimit, HashValue: dr.HashValue, Data: resultChunk}
+	packet := GossipPacket{Simple: nil, Rumor: nil, Status: nil, Private: nil, DataRequest: nil, DataReply: &dreply}
+
+	addr, err := net.ResolveUDPAddr("udp4", peer)
+	check(err)
+	packetBytes, err := protobuf.Encode(&packet)
+	check(err)
+	_, err = conn.WriteToUDP(packetBytes, addr)
+	check(err)
+	f.RUnlock()
 
 }

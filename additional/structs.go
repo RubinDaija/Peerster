@@ -15,10 +15,12 @@ type SimpleMessage struct {
 //GossipPacket struct
 //Updated to include rumor message and status packets
 type GossipPacket struct {
-	Simple  *SimpleMessage
-	Rumor   *RumorMessage
-	Status  *StatusPacket
-	Private *PrivateMessage
+	Simple      *SimpleMessage
+	Rumor       *RumorMessage
+	Status      *StatusPacket
+	Private     *PrivateMessage
+	DataRequest *DataRequest
+	DataReply   *DataReply
 }
 
 //Message - simple message struct
@@ -60,6 +62,23 @@ type StatusPacket struct {
 type PeersMap struct {
 	sync.RWMutex
 	peers map[string]string
+}
+
+//DataRequest struct
+type DataRequest struct {
+	Origin      string
+	Destination string
+	HopLimit    uint32
+	HashValue   []byte
+}
+
+//DataReply struct
+type DataReply struct {
+	Origin      string
+	Destination string
+	HopLimit    uint32
+	HashValue   []byte
+	Data        []byte
 }
 
 //NewPeersMap - Technically a constructor for the struct, we don't need a lock, runs at the very beginning
