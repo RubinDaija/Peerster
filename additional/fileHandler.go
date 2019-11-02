@@ -224,6 +224,7 @@ func (f *Files) StoreNewChunk(dataRpl DataReply, conn *net.UDPConn, dsdv *DSDVMa
 
 		//check if it is the metahash
 		if uncompFile.waitingMeta {
+			fmt.Println("DOWNLOADING metafile of", uncompFile.filename, "from", uncompFile.fromWhom)
 			uncompFile.waitingMeta = false
 			//save the metahash file in the cache
 			metaFile, err := os.Create("cache/" + hashStr)
@@ -260,6 +261,7 @@ func (f *Files) StoreNewChunk(dataRpl DataReply, conn *net.UDPConn, dsdv *DSDVMa
 			//save the hash in the array for processing when we are done and update the ones to be received (remove the one we received)
 			uncompFile.filesRecieved = append(uncompFile.filesRecieved, hashStr)
 			uncompFile.filesToRec = remove(uncompFile.filesToRec, 0)
+			fmt.Println("DOWNLOADING", uncompFile.filename, "chunk", len(uncompFile.filesRecieved), "from", uncompFile.fromWhom)
 
 			//check if there are hashes left to get and get the next hash to request
 			if len(uncompFile.filesToRec) > 0 {
@@ -273,7 +275,8 @@ func (f *Files) StoreNewChunk(dataRpl DataReply, conn *net.UDPConn, dsdv *DSDVMa
 				pck := GossipPacket{Simple: nil, Rumor: nil, Status: nil, Private: nil, DataRequest: &dr, DataReply: nil}
 				f.hashChan[nextHash] = newChan
 				go SendNWait(conn, pck, fileReqTimeout, &newChan, dsdv)
-			} else {
+			} else { //file it tutocompleto
+				fmt.Println("RECONSTRUCTED file", uncompFile.filename)
 				fileChunk := make([]byte, 8192)
 				//create the new file
 				completeFile, err := os.Create("Downloads/" + hashStr)

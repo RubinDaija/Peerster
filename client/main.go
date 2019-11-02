@@ -4,6 +4,7 @@ package main
 import (
 	"Peerster/additional"
 	"Peerster/protobuf"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"net"
@@ -18,10 +19,16 @@ func main() {
 	//Flag variables
 	var UIPort int
 	var msg string
+	var dest string
+	var file string
+	var request string
 
 	//Setting up the
 	flag.IntVar(&UIPort, "UIPort", 6969, "Port of the gossiper")
 	flag.StringVar(&msg, "msg", "Hello, World!", "Message to be sent.")
+	flag.StringVar(&dest, "dest", "", "destination for the private message")
+	flag.StringVar(&file, "file", "", "file to be index by the gossiper")
+	flag.StringVar(&request, "request", "", "request a chunk or a metafile of this hash")
 
 	flag.Parse()
 
@@ -36,8 +43,14 @@ func main() {
 
 	defer c.Close()
 
+	hash, err := hex.DecodeString(request)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	msgToSend := &additional.Message{Text: msg, Destination: &dest, File: &file, Request: &hash}
+
 	//Using protobuf to encode the message
-	msgToSend := &additional.Message{Text: msg}
 	packetBytes, err := protobuf.Encode(msgToSend)
 	if err != nil {
 		fmt.Println(err)
