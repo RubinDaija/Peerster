@@ -298,7 +298,8 @@ func contRouteRummor(peers *additional.PeersMap, connection *net.UDPConn, rtimer
 }
 
 //listening to peer messages continuosly
-func listenToMessages(conn *net.UDPConn, peers *additional.PeersMap, msgs *additional.MsgMap, status *additional.StatusMap, ipchan *additional.IPChanMap, dsdv *additional.DSDVMap, pmsg *additional.PrivateMsgMap, ourName string) {
+func listenToMessages(conn *net.UDPConn, peers *additional.PeersMap, msgs *additional.MsgMap, status *additional.StatusMap, ipchan *additional.IPChanMap,
+	dsdv *additional.DSDVMap, pmsg *additional.PrivateMsgMap, ourName string) {
 	buffer := make([]byte, 1024)
 	var latestRumor additional.GossipPacket
 	for {
