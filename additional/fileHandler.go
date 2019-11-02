@@ -120,7 +120,7 @@ func (f *Files) AddNewFile(fileName string) {
 
 }
 
-//SendNWait this function sends our gossip datarequest and waits for the reply TODO there needs to be a map to map these channels to the sender smth like that, this map should be hash requested and channel
+//SendNWait this function sends our gossip datarequest and waits for the reply
 func SendNWait(conn *net.UDPConn, pck GossipPacket, timeout int, recvdChann *chan int, dsdv *DSDVMap) {
 	peer := dsdv.GetIP(pck.DataRequest.Destination)
 	addr, err := net.ResolveUDPAddr("udp4", peer)
@@ -155,7 +155,7 @@ func SendNWait(conn *net.UDPConn, pck GossipPacket, timeout int, recvdChann *cha
 	}
 }
 
-//CheckNReturnChunk checks if we have a particular chunk and then we return it, if we don't have it then the result will be empty TODO make this send the reply  also through udp conn
+//CheckNReturnChunk checks if we have a particular chunk and then we return it, if we don't have it then the result will be empty
 func (f *Files) CheckNReturnChunk(dreq DataRequest, dsdv *DSDVMap, conn *net.UDPConn) {
 	var result []byte
 	hash := hex.EncodeToString(dreq.HashValue)
@@ -279,7 +279,7 @@ func (f *Files) StoreNewChunk(dataRpl DataReply, conn *net.UDPConn, dsdv *DSDVMa
 				completeFile, err := os.Create("Downloads/" + hashStr)
 				check(err)
 
-				//Create the file completely, TODO put the parts together
+				//Create the file completely
 				for _, fhash := range uncompFile.filesRecieved {
 					//read the file chunk to write
 					tmpfile, err := os.Open("cache/" + fhash)
@@ -305,7 +305,7 @@ func (f *Files) StoreNewChunk(dataRpl DataReply, conn *net.UDPConn, dsdv *DSDVMa
 }
 
 //SendRequestedChunk sends the requested file chunk to the peer; supposes hop limit is already decremented and also that we are the destination
-//We are also supposed to pass the peer to whom the reply should be sent to.
+//We are also supposed to pass the peer to whom the reply should be sent to. //TODO: i dont know if we need this
 func (f *Files) SendRequestedChunk(dr DataRequest, conn *net.UDPConn, peer string) {
 	f.RLock()
 	hashStr := hex.EncodeToString(dr.HashValue)
@@ -321,7 +321,7 @@ func (f *Files) SendRequestedChunk(dr DataRequest, conn *net.UDPConn, peer strin
 		resultChunk = fileChunk[:noRead]
 		file.Close()
 	}
-	dreply := DataReply{Origin: dr.Origin, Destination: dr.Destination, HopLimit: dr.HopLimit, HashValue: dr.HashValue, Data: resultChunk} //TODO this is not correct there may need to be the other hop limit
+	dreply := DataReply{Origin: dr.Origin, Destination: dr.Destination, HopLimit: hopLim, HashValue: dr.HashValue, Data: resultChunk}
 	packet := GossipPacket{Simple: nil, Rumor: nil, Status: nil, Private: nil, DataRequest: nil, DataReply: &dreply}
 
 	addr, err := net.ResolveUDPAddr("udp4", peer)
