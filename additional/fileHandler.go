@@ -140,7 +140,7 @@ func SendNWait(conn *net.UDPConn, pck GossipPacket, timeout int, recvdChann *cha
 	}
 	ticker := time.NewTicker(time.Duration(timeout) * time.Second)
 	for { //sends messages till we receive a reply
-		peer := dsdv.GetIP(pck.DataRequest.Destination)
+		peer = dsdv.GetIP(pck.DataRequest.Destination)
 		select {
 		case <-ticker.C:
 			_, err = conn.WriteToUDP(packetBytes, addr)
@@ -156,8 +156,9 @@ func SendNWait(conn *net.UDPConn, pck GossipPacket, timeout int, recvdChann *cha
 }
 
 //CheckNReturnChunk checks if we have a particular chunk and then we return it, if we don't have it then the result will be empty TODO make this send the reply  also through udp conn
-func (f *Files) CheckNReturnChunk(hash string) []byte {
+func (f *Files) CheckNReturnChunk(dreq DataRequest, dsdv *DSDVMap, conn *net.UDPConn) {
 	var result []byte
+	hash := hex.EncodeToString(dreq.HashValue)
 	f.RLock()
 	_, existence := f.allChunks[hash]
 	if existence {
@@ -170,7 +171,16 @@ func (f *Files) CheckNReturnChunk(hash string) []byte {
 		file.Close()
 	}
 	f.RUnlock()
-	return result
+	dataRep := DataReply{Origin: dreq.Origin, Destination: dreq.Destination, HopLimit: hopLim, HashValue: dreq.HashValue, Data: result}
+	ip2send := dsdv.GetIP(dreq.Origin)
+	pck := GossipPacket{Simple: nil, Rumor: nil, Status: nil, Private: nil, DataRequest: nil, DataReply: &dataRep}
+	addr, err := net.ResolveUDPAddr("udp4", ip2send)
+	check(err)
+	packetBytes, err := protobuf.Encode(&pck)
+	check(err)
+	_, err = conn.WriteToUDP(packetBytes, addr)
+	check(err)
+
 }
 
 //StoreNewChunk checks the sha256 of the chunk and then if we need it stores it
@@ -326,10 +336,23 @@ func (f *Files) SendRequestedChunk(dr DataRequest, conn *net.UDPConn, peer strin
 
 //RequestFile is called at the very beginnign when the file is requested
 //It creates the uncompFile struct provides it the file name, towhom, metahash and then also sends the request
-func (f *Files) RequestFile(dest string, fileName string, hash []byte, conn *net.UDPConn, dsdv *DSDVMap) {
-	//request the metahash file
+func (f *Files) RequestFile(dest string, fileName string, hash []byte, conn *net.UDPConn, dsdv *DSDVMap, ourName string) {
+	f.Lock()
+	defer f.Unlock()
+	//Create the uncomplete file struct and add it to the datastruct
+	filestorec := make([]string, 1)
+	filesreced := make([]string, 1)
+	uFile := uncompleteFile{filesToRec: filestorec, filesRecieved: filesreced, waitingMeta: true, fromWhom: dest, filename: fileName, metahash: hash}
+	hashStr := hex.EncodeToString(hash)
+	f.uFiles.files[hashStr] = uFile
 
-	//prepare everything data structs for the request like initializing the ucompleted file and so on
+	//send the request
+	//new channel to be used by sendnwait provided that we need to send more messages
+	newChan := make(chan int, 2)
+	dr := DataRequest{Origin: ourName, Destination: dest, HopLimit: hopLim}
+	pck := GossipPacket{Simple: nil, Rumor: nil, Status: nil, Private: nil, DataRequest: &dr, DataReply: nil}
+	f.hashChan[hashStr] = newChan
+	go SendNWait(conn, pck, fileReqTimeout, &newChan, dsdv)
 }
 
 //taken from https://stackoverflow.com/questions/37334119/how-to-delete-an-element-from-a-slice-in-golang
